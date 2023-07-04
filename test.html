@@ -1,0 +1,239 @@
+<!DOCTYPE html
+<html>
+
+<head>
+<style>
+
+/* Split the screen in half */
+.split {
+  /* height: 100%; */
+  height: 100vh;
+  width: 50%;
+  position: fixed;
+  z-index: 1;
+  top: 0;
+  overflow-x: hidden;
+  padding-top: 20px;
+}
+
+/* Control the left side */
+.left {
+  left: 0;
+  background-color: #ffffff;
+}
+
+/* Control the right side */
+.right {
+  right: 0;
+  background-image: url("/home/grish/src/jai/attic-backend/img/attic-background.jpg");
+  background-size: auto;
+  background-repeat: repeat;
+  background-position: right;
+}
+
+.rendered-post {
+  text-align: left;
+  padding-left: 20px;
+  padding-right: 20px;
+  padding-bottom: 50px;
+}
+
+/* If you want the content centered horizontally and vertically */
+.centered {
+}
+
+/* Style the image inside the centered container, if needed */
+.centered img {
+  width: 150px;
+  border-radius: 50%;
+}
+
+.input-wrapper {
+  padding-right: 10px;
+  padding-bottom: 10px;
+}
+
+</style>
+
+<script type="module" src="https://md-block.verou.me/md-block.js"></script>
+
+<script type="text/javascript">
+
+  const baseUrl = "http://localhost:9980";
+
+  async function loadAuthorsAndPosts() {
+    const res = await fetch(`${baseUrl}/api/posts/by-author`);
+    const authors = Array.from(await res.json());
+    sessionStorage.setItem("authors", JSON.stringify(authors));
+
+    sessionStorage.setItem("selectedAuthorIndex", 0);
+    sessionStorage.setItem("selectedPostIndex", 0);
+    getAuthors();
+    getPosts();
+  }
+
+  function getAuthors() {
+    const authors = JSON.parse(sessionStorage.getItem("authors"));
+    const select = document.getElementById("select-authors");
+    authors.forEach((author) => {
+      const opt = document.createElement("option");
+      opt.value = author.name;
+      opt.innerHTML = author.name;
+      select.appendChild(opt);
+    });
+
+    sessionStorage.setItem("authors", JSON.stringify(authors));
+  }
+
+  function getPosts() {
+    const authors = JSON.parse(sessionStorage.getItem("authors"));
+
+    const select = document.getElementById("select-posts");
+    while (select.firstChild) {
+      select.removeChild(select.lastChild);
+    }
+
+    const selectedAuthorIndex = sessionStorage.getItem("selectedAuthorIndex");
+    let author = authors[selectedAuthorIndex];
+    if (author == undefined) {
+      return;
+    };
+
+    author.posts.forEach((post) => {
+      const opt = document.createElement("option");
+      opt.value = post.filename;
+      opt.innerHTML = post.title + " (" + post.date + ")";
+      select.appendChild(opt);
+    });
+
+    setPostData(select.value);
+  }
+
+  function getSelectedPost() {
+    const authors = Array.from(JSON.parse(sessionStorage.getItem("authors")));
+    const selectedAuthorIndex = sessionStorage.getItem("selectedAuthorIndex");
+    const selectedAuthor = authors[selectedAuthorIndex];
+
+    const selectedPostIndex = sessionStorage.getItem("selectedPostIndex");
+    const post = selectedAuthor.posts[selectedPostIndex];
+
+    return post;
+  }
+
+  async function setPostData() {
+    const post = getSelectedPost();
+
+    document.getElementById("postTitle").value = post.title;
+    document.getElementById("postAuthor").value = post.author;
+    document.getElementById("postDate").value = post.date;
+
+    await loadPostBody(post);
+  }
+
+  function storeSelectedAuthorIndex(authorName) {
+    const authors = JSON.parse(sessionStorage.getItem("authors"));
+    const index = authors.findIndex(a => a.name == authorName);
+    sessionStorage.setItem("selectedAuthorIndex", index);
+    sessionStorage.setItem("selectedPostIndex", 0);
+  }
+
+  function storeSelectedPostIndex(postFilename) {
+    const authors = JSON.parse(sessionStorage.getItem("authors"));
+    const selectedAuthorIndex = sessionStorage.getItem("selectedAuthorIndex");
+    const author = authors[selectedAuthorIndex];
+    const index = author.posts.findIndex(p => p.filename == postFilename);
+    sessionStorage.setItem("selectedPostIndex", index);
+  }
+
+  async function loadPostBody(post) {
+    const res = await fetch(`${baseUrl}/api/${post.filename}`);
+    const data = await res.json();
+
+    const markdown = data.data;
+    document.getElementById("postBody").value = markdown;
+
+    updatePostBodyHTML();
+
+    // document.getElementById("renderedHTML").innerHTML = html;
+
+    // // update the markdown
+    // const converter = new showdown.Converter();
+    // var markdown = converter.makeMarkdown(html);
+    // markdown = markdown.split(/\n/).map(function (line) {
+    //   // Remove the space the start of any line that only starts with one and only one space
+    //   return line.replace(/^\s{1}\S+/, '');
+    // }).join('\n');
+    // document.getElementById("postBody").value = markdown;
+  }
+
+  async function savePost() {
+    const post = getSelectedPost();
+    const res = await fetch(`${baseUrl}/api/${post.filename}`);
+    const data = await res.json();
+
+    const html = data.data;
+    document.getElementById("renderedHTML").innerHTML = html;
+
+    // update the markdown
+    var converter = new showdown.Converter();
+    const markdown = converter.makeMarkdown(html);
+    document.getElementById("postBody").value = markdown;
+  }
+
+</script>
+</head>
+
+
+<body>
+
+<div class="split left">
+
+<label for="select-authors">Author:</label>
+<select name="Authors" id="select-authors" onchange="storeSelectedAuthorIndex(this.value); getPosts()">
+</select>
+
+<label for="select-posts">Post:</label>
+<select name="Posts" id="select-posts" onchange="storeSelectedPostIndex(this.value); setPostData()">
+</select>
+
+<div class="input-wrapper">
+<label for="postTitle">Title:</label>
+<textarea id="postTitle" name="postTitle" style="float: right; width: 80%;" rows=1></textarea>
+</div>
+
+<div class="input-wrapper">
+<label for="postAuthor">Author:</label>
+<textarea id="postAuthor" name="postAuthor" style="float: right; width: 80%;" rows=1></textarea>
+</div>
+
+<div class="input-wrapper">
+<label for="postDate">Date:</label>
+<textarea id="postDate" name="postDate" style="float: right; width: 80%;" rows=1></textarea>
+</div>
+
+<div style="padding-top: 10px; padding-bottom: 20px; height: 90%;">
+<textarea id="postBody" name="postBody" style="resize: false; width: 90%; height: 90%; margin: 0 auto; display: block;" oninput="updatePostBodyHTML()"></textarea>
+</div>
+
+<div class="split right">
+  <div id="renderedHTML" class="rendered-post">
+  </div>
+
+  <script>window.markdeepOptions = {mode: 'script'};</script>
+  <script src="markdeep.min.js"></script><script src="https://morgan3d.github.io/markdeep/latest/markdeep.min.js"></script>
+  <script>
+  function updatePostBodyHTML() {
+    // var converter = new showdown.Converter();
+    const text = document.getElementById("postBody").value;
+    const html = window.markdeep.format(text);
+    document.getElementById("renderedHTML").innerHTML = html;
+    // document.getElementById("mdBlock").mdContent = text;
+  }
+  // updatePostBodyHTML();
+  loadAuthorsAndPosts();
+  </script>
+</div>
+</div>
+
+</body>
+</html>

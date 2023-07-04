@@ -13,34 +13,113 @@ main :: () {
     // log every request
     any("*", (request: *Request) { print("Have request to %\n", request.path); });
 
-    get("/api/authors", (request: *Request) {
-        get_authors(request);
-    });
+    get("/api/posts/by-author", (request: *Request) {
+        push_allocator(temp);
+        get_posts_by_author(request);
+        reset_temporary_storage();
+    }); // get posts grouped by author
 
-    get("/api/posts/:author/:date/:filename", (request: *Request) {
-        get_post(request);
+    get("/api/posts/:id/draft_body", (request: *Request) {
+        push_allocator(temp);
+        get_draft_body(request);
+        reset_temporary_storage();
     });
+    get("/api/posts/:id/draft",      (request: *Request) {});
+    get("/api/posts/:id/published",  (request: *Request) {});
 
-    // post("/api/posts/:author/:date/:filename", (request: *Request) {
-    //     update_post(request);
+    post("/api/posts/:id/draft/body", (request: *Request) {}); // update draft body
+    post("/api/posts/:id/title",      (request: *Request) {}); // update title
+    post("/api/posts/:id/date",       (request: *Request) {}); // update date
+    post("/api/publish/:id",          (request: *Request) {}); // draft body becomes published body
+
+    // get("/api/posts/:author/:date/:filename", (request: *Request) {
+    //     get_post(request);
     // });
 
     while 1 sleep_milliseconds(60_000); // the program just exits instantly without this
 }
 
-Authors :: Table(string, *[..]Post);
+cors_middleware :: (request: *Request) {
+
+    // table_add(*request.headers, "Access-Control-Allow-Origin", "*");
+    // table_add(*request.headers, "Access-Control-Allow-Methods", "POST");
+    // table_add(*request.headers, "Access-Control-Allow-Headers", "Origin, Methods, Content-Type");
+
+    // request.headers["Access-Control-Allow-Origin"] = "*";
+    // request.headers["Access-Control-Allow-Methods"] = "POST";
+    // request.headers["Access-Control-Allow-Headers"] = "Origin, Methods, Content-Type";
+}
+
+// Authors :: Table(string, *[..]Post);
 
 Author :: struct {
     name: string;
-    posts: [..]Post;
+    posts: *[..]Post;
 };
 
 Post :: struct {
-    title: string;
+    id:     int;
     author: string;
-    date: string;
-    filename: string;
-};
+    title:  string;
+    date:   string;
+    post:   string;
+    draft:  string;
+}
+
+get_posts_by_author :: (request: *Request) {
+    posts := load_posts();
+    if posts == null {
+        // TODO
+    }
+
+    authors: [..]Author;
+    for post: <<posts {
+        author_exists := false;
+        for author: authors {
+            if author.name == post.author {
+                author_exists = true;
+                array_add(author.posts, post);
+            }
+        }
+        if !author_exists {
+            author := New(Author);
+            author.name = post.author;
+            author.posts = New([..] Post);
+
+            array_add(author.posts, post);
+            array_add(*authors, author);
+        }
+    }
+
+    result := json_write_string(authors);
+    send_json(request, result);
+}
+
+load_posts :: () -> *[..] Post {
+    #import "csv";
+
+    DB_FILE :: "posts.db";
+
+    get_member :: (name: string, index: int, x: *void) -> string {
+        return name;
+    }
+
+    csv_data, success := read_entire_file(DB_FILE);
+    if !success {
+        log("Error reading file '%'", DB_FILE, flags=.ERROR);
+        return null;
+    }
+
+    posts := New([..] Post);
+    parse_success: bool;
+    <<posts, parse_success = csv_parse(csv_data, Post, null, get_member);
+    if !parse_success {
+        log("Error parsing csv", flags=.ERROR);
+        return null;
+    }
+
+    return posts;
+}
 
 // POSTS_DIRECTORY :: "/usr/local/www/legacy/posts";
 POSTS_DIRECTORY :: "/home/grish/scratch/attic-html/posts";
@@ -48,7 +127,7 @@ HTML_DIRECTORY :: "/home/grish/scratch/attic-html";
 
 using #import "Hash_Table";
 operator []= :: (t: *Table(string, string), index: string, value: string) {;
-  table_add(t, index, value);
+    table_add(t, index, value);
 }
 
 Update_Post :: struct {
@@ -56,50 +135,94 @@ Update_Post :: struct {
     body: string;
 }
 
-get_post :: (request: *Request) {
-    postBody: struct {
+get_draft_body :: (request: *Request) {
+    draft: struct {
         data: string;
     }
 
-    author, author_found := table_find(*request.params, "author");
-    if !author_found {
-        send_html(request, tprint("<pre>Missing author parameter</pre>"), status_code=400);
+    posts := load_posts();
+    if posts == null {
+        // TODO
+    }
+
+    idStr, id_found := table_find(*request.params, "id");
+    if !id_found {
+        send_html(request, tprint("<pre>Missing id parameter</pre>"), status_code=400);
         return;
     }
-    log("author: %", author);
-
-    date, date_found := table_find(*request.params, "date");
-    if !date_found {
-        send_html(request, tprint("<pre>Missing date parameter</pre>"), status_code=400);
-        return;
-    }
-    log("date: %", date);
-
-    filename, filename_found := table_find(*request.params, "filename");
-    if !filename_found {
-        send_html(request, tprint("<pre>Missing filename parameter</pre>"), status_code=400);
-        return;
-    }
-    log("filename: %", filename);
-
-    path := replace(join(POSTS_DIRECTORY, author, date, filename, separator="/"), "%20", " ");
-    defer free(path);
-
-    log("path: %", path);
-    body, success := get_post_body(path);
+    id, success := to_integer(idStr);
     if !success {
-        send_html(request, tprint("<pre>Post not found</pre>"), status_code=404);
+        send_html(request, tprint("<pre>ID should be in integer</pre>"), status_code=400);
         return;
     }
 
-    postBody.data = body;
-    result := json_write_string(postBody);
+    found := false;
+    for post: <<posts {
+        if post.id == id {
+            draft_data, success := read_entire_file(join(POSTS_DIRECTORY, post.draft, separator="/"));
+            if !success {
+                log("Failed to read draft file for post ID %", id);
+                send_html(request, tprint("<pre>Error reading post draft</pre>"), status_code=500);
+                return;
+            }
+
+            draft.data = draft_data;
+            found = true;
+            break;
+        }
+    }
+
+    result := json_write_string(draft);
     send_json(request, result);
     // table_reset(*request.params); // TODO: seems like things break without this, should be in the lib though
-    reset_temporary_storage();
 }
 
+// get_post :: (request: *Request) {
+//     postBody: struct {
+//         data: string;
+//     }
+
+//     author, author_found := table_find(*request.params, "author");
+//     if !author_found {
+//         send_html(request, tprint("<pre>Missing author parameter</pre>"), status_code=400);
+//         return;
+//     }
+//     log("author: %", author);
+
+//     date, date_found := table_find(*request.params, "date");
+//     if !date_found {
+//         send_html(request, tprint("<pre>Missing date parameter</pre>"), status_code=400);
+//         return;
+//     }
+//     log("date: %", date);
+
+//     filename, filename_found := table_find(*request.params, "filename");
+//     if !filename_found {
+//         send_html(request, tprint("<pre>Missing filename parameter</pre>"), status_code=400);
+//         return;
+//     }
+//     log("filename: %", filename);
+
+//     path := replace(join(POSTS_DIRECTORY, author, date, filename, separator="/"), "%20", " ");
+//     defer free(path);
+
+//     log("path: %", path);
+//     body, success := get_post_body(path);
+//     if !success {
+//         send_html(request, tprint("<pre>Post not found</pre>"), status_code=404);
+//         return;
+//     }
+
+//     postBody.data = body;
+//     result := json_write_string(postBody);
+//     send_json(request, result);
+//     // table_reset(*request.params); // TODO: seems like things break without this, should be in the lib though
+//     reset_temporary_storage();
+// }
+
 update_post :: (request: *Request) {
+
+    // load_posts
 
     author, author_found := table_find(*request.params, "author");
     if !author_found {
@@ -120,51 +243,6 @@ update_post :: (request: *Request) {
     }
 
     log(request.body);
-}
-
-get_authors :: (request: *Request) {
-    authors_table := get_authors_and_posts();
-    authors: [..]Author;
-    for v, k: authors_table {
-        author: Author;
-        author.name = k;
-        author.posts = <<v;
-        array_add(*authors, author);
-    }
-    result := json_write_string(authors);
-
-    send_json(request, result);
-    reset_temporary_storage();
-}
-
-get_authors_and_posts :: () -> Authors {
-
-    authors: Authors;
-
-    post_paths := get_post_paths();
-    for post_path: post_paths {
-        words := post_path.words;
-        author_name := words[words.count-3];
-
-        post: Post;
-        post.author = author_name;
-        post.date = words[words.count-2];
-        post.filename = join(..array_view(words, 4), separator="/");
-
-        title, success := parse_post_title(join(HTML_DIRECTORY, "/", post.filename));
-        if success {
-            post.title = title;
-        }
-
-        author_posts, author_found := table_find(*authors, author_name);
-        if !author_found {
-            author_posts = New([..]Post);
-            table_add(*authors, author_name, author_posts);
-        }
-        array_add(author_posts, post);
-    }
-
-    return authors;
 }
 
 parse_post_title :: (path: string) -> string, bool {
