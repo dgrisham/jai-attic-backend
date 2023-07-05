@@ -23,11 +23,16 @@ main :: () {
         push_allocator(temp);
         get_draft_body(request);
         reset_temporary_storage();
-    });
+    }); // get the draft markdeep body for this post
+    post("/api/posts/:id/draft_body", (request: *Request) {
+        push_allocator(temp);
+        update_draft_body(request);
+        reset_temporary_storage();
+    }); // update draft body
+
     get("/api/posts/:id/draft",      (request: *Request) {});
     get("/api/posts/:id/published",  (request: *Request) {});
 
-    post("/api/posts/:id/draft/body", (request: *Request) {}); // update draft body
     post("/api/posts/:id/title",      (request: *Request) {}); // update title
     post("/api/posts/:id/date",       (request: *Request) {}); // update date
     post("/api/publish/:id",          (request: *Request) {}); // draft body becomes published body
@@ -69,7 +74,9 @@ Post :: struct {
 get_posts_by_author :: (request: *Request) {
     posts := load_posts();
     if posts == null {
-        // TODO
+        log("Failed to load posts db");
+        send_html(request, tprint("<pre>Failed to load posts db</pre>"), status_code=500);
+        return;
     }
 
     authors: [..]Author;
@@ -95,10 +102,10 @@ get_posts_by_author :: (request: *Request) {
     send_json(request, result);
 }
 
+DB_FILE :: "posts.db";
+
 load_posts :: () -> *[..] Post {
     #import "csv";
-
-    DB_FILE :: "posts.db";
 
     get_member :: (name: string, index: int, x: *void) -> string {
         return name;
@@ -121,6 +128,30 @@ load_posts :: () -> *[..] Post {
     return posts;
 }
 
+// overwrites the entire database file
+// write_posts_to_db :: (posts: *[..] Post) -> bool {
+//     #import "csv";
+
+//     builder: String_Builder;
+//     builder.allocator = temp;
+//     init_string_builder(*builder);
+
+//     for post: <<posts {
+//         append(builder, post.id);
+//     }
+
+//     return posts;
+// }
+
+// Post :: struct {
+//     id:     int;
+//     author: string;
+//     title:  string;
+//     date:   string;
+//     post:   string;
+//     draft:  string;
+// }
+
 // POSTS_DIRECTORY :: "/usr/local/www/legacy/posts";
 POSTS_DIRECTORY :: "/home/grish/scratch/attic-html/posts";
 HTML_DIRECTORY :: "/home/grish/scratch/attic-html";
@@ -130,11 +161,6 @@ operator []= :: (t: *Table(string, string), index: string, value: string) {;
     table_add(t, index, value);
 }
 
-Update_Post :: struct {
-    title: string;
-    body: string;
-}
-
 get_draft_body :: (request: *Request) {
     draft: struct {
         data: string;
@@ -142,7 +168,9 @@ get_draft_body :: (request: *Request) {
 
     posts := load_posts();
     if posts == null {
-        // TODO
+        log("Failed to load posts db");
+        send_html(request, tprint("<pre>Failed to load posts db</pre>"), status_code=500);
+        return;
     }
 
     idStr, id_found := table_find(*request.params, "id");
@@ -171,10 +199,125 @@ get_draft_body :: (request: *Request) {
             break;
         }
     }
+    if !found {
+        send_html(request, tprint("<pre>post not found</pre>"), status_code=404);
+        return;
+    }
 
     result := json_write_string(draft);
     send_json(request, result);
     // table_reset(*request.params); // TODO: seems like things break without this, should be in the lib though
+}
+
+// update_post_metadata :: (request: *Request) {
+//     post_metadata: struct {
+//         author: string;
+//         title: string;
+//         date: string;
+//     }
+
+//     posts := load_posts();
+//     if posts == null {
+//         // TODO
+//     }
+
+//     idStr, id_found := table_find(*request.params, "id");
+//     if !id_found {
+//         send_html(request, tprint("<pre>Missing id parameter</pre>"), status_code=400);
+//         return;
+//     }
+//     id, success := to_integer(idStr);
+//     if !success {
+//         send_html(request, tprint("<pre>id should be in integer</pre>"), status_code=400);
+//         return;
+//     }
+
+//     found := false;
+//     for post: <<posts {
+//         if post.id == id {
+//             found = true;
+//             break;
+//         }
+//     }
+//     if !found {
+//         send_html(request, tprint("<pre>post not found</pre>"), status_code=404);
+//         return;
+//     }
+
+//     result := json_write_string(draft);
+//     send_json(request, result);
+//     // table_reset(*request.params); // TODO: seems like things break without this, should be in the lib though
+// }
+
+update_draft_body :: (request: *Request) {
+    Post_Draft_Body :: struct {
+        data: string;
+    }
+
+    posts := load_posts();
+    if posts == null {
+        log("Failed to load posts db");
+        send_html(request, tprint("<pre>Failed to load posts db</pre>"), status_code=500);
+        return;
+    }
+
+    idStr, id_found := table_find(*request.params, "id");
+    if !id_found {
+        send_html(request, tprint("<pre>Missing id parameter</pre>"), status_code=400);
+        return;
+    }
+    id, success := to_integer(idStr);
+    if !success {
+        send_html(request, tprint("<pre>ID should be in integer</pre>"), status_code=400);
+        return;
+    }
+
+    found := false;
+    for post: <<posts {
+        if post.id == id {
+            new_draft: Post_Draft_Body;
+            success: bool;
+
+            { // pull out the request body
+                success, new_draft = json_parse_string(request.body, Post_Draft_Body);
+                if !success {
+                    log("Failed to unmarshal json request body", id);
+                    send_html(request, tprint("<pre>Failed to unmarshal json request body</pre>"), status_code=400);
+                    return;
+                }
+            }
+
+            draft_file := join(POSTS_DIRECTORY, post.draft, separator="/");
+            draft_backup_file := tprint("%.bak", draft_file);
+
+            { // copy the current draft to the backup file
+                success := copy_file(draft_file, draft_backup_file);
+                if !success {
+                    log("Failed to backup draft file before overwriting (id %)", id);
+                    send_html(request, tprint("<pre>Error updating draft</pre>"), status_code=500);
+                    return;
+                }
+            }
+
+            { // overwrite the current draft with the user's content
+                success := write_entire_file(draft_file, new_draft.data);
+                if !success {
+                    log("Failed to update draft for post id %", id);
+                    send_html(request, tprint("<pre>Error updating draft</pre>"), status_code=500);
+                    return;
+                }
+            }
+
+            found = true;
+            break;
+        }
+    }
+
+    if !found {
+        send_html(request, tprint("<pre>Post id not found</pre>"), status_code=404);
+        return;
+    }
+    send_html(request, tprint("<pre>Successfully updated draft</pre>"), status_code=200);
 }
 
 // get_post :: (request: *Request) {
