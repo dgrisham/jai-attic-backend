@@ -5,47 +5,11 @@
 <style>
 
 /* Split the screen in half */
-.split {
-  /* height: 100%; */
-  height: 100vh;
-  width: 50%;
-  position: fixed;
-  z-index: 1;
-  top: 0;
-  overflow-x: hidden;
-  padding-top: 20px;
-}
-
-/* Control the left side */
-.left {
-  left: 0;
-  background-color: #ffffff;
-}
-
-/* Control the right side */
-.right {
-  right: 0;
+body {
   background-image: url("/home/grish/src/jai/attic-backend/img/attic-background.jpg");
   background-size: auto;
   background-repeat: repeat;
   background-position: right;
-}
-
-.rendered-post {
-  text-align: left;
-  padding-left: 20px;
-  padding-right: 20px;
-  padding-bottom: 50px;
-}
-
-/* If you want the content centered horizontally and vertically */
-.centered {
-}
-
-/* Style the image inside the centered container, if needed */
-.centered img {
-  width: 150px;
-  border-radius: 50%;
 }
 
 .input-wrapper {
@@ -101,7 +65,7 @@
 
     author.posts.forEach((post) => {
       const opt = document.createElement("option");
-      opt.value = post.filename;
+      opt.value = post.id;
       opt.innerHTML = post.title + " (" + post.date + ")";
       select.appendChild(opt);
     });
@@ -137,56 +101,59 @@
     sessionStorage.setItem("selectedPostIndex", 0);
   }
 
-  function storeSelectedPostIndex(postFilename) {
+  function storeSelectedPostIndex(postID) {
     const authors = JSON.parse(sessionStorage.getItem("authors"));
     const selectedAuthorIndex = sessionStorage.getItem("selectedAuthorIndex");
     const author = authors[selectedAuthorIndex];
-    const index = author.posts.findIndex(p => p.filename == postFilename);
+    const index = author.posts.findIndex(p => p.id == postID);
     sessionStorage.setItem("selectedPostIndex", index);
   }
 
+  async function updatePostMetadata() {
+    const post = getSelectedPost();
+    const body = {
+      title: document.getElementById("postTitle").value,
+      author: document.getElementById("postAuthor").value,
+      date: document.getElementById("postDate").value,
+    };
+    const res = await fetch(`${baseUrl}/api/posts/${post.id}/metadata`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+      headers: {
+        'Content-Type': 'application/json',
+      },
+    });
+  }
+
   async function loadPostBody(post) {
-    const res = await fetch(`${baseUrl}/api/${post.filename}`);
+    document.getElementById("postBody").value = "";
+
+    const res = await fetch(`${baseUrl}/api/posts/${post.id}/draft-body`);
     const data = await res.json();
 
     const markdown = data.data;
     document.getElementById("postBody").value = markdown;
-
-    updatePostBodyHTML();
-
-    // document.getElementById("renderedHTML").innerHTML = html;
-
-    // // update the markdown
-    // const converter = new showdown.Converter();
-    // var markdown = converter.makeMarkdown(html);
-    // markdown = markdown.split(/\n/).map(function (line) {
-    //   // Remove the space the start of any line that only starts with one and only one space
-    //   return line.replace(/^\s{1}\S+/, '');
-    // }).join('\n');
-    // document.getElementById("postBody").value = markdown;
   }
 
-  async function savePost() {
+  async function saveDraftBody() {
     const post = getSelectedPost();
-    const res = await fetch(`${baseUrl}/api/${post.filename}`);
-    const data = await res.json();
-
-    const html = data.data;
-    document.getElementById("renderedHTML").innerHTML = html;
-
-    // update the markdown
-    var converter = new showdown.Converter();
-    const markdown = converter.makeMarkdown(html);
-    document.getElementById("postBody").value = markdown;
+    const body = {
+      data: document.getElementById("postBody").value,
+    };
+    const res = await fetch(`${baseUrl}/api/posts/${post.id}/draft-body`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+      headers: {
+        'Content-Type': 'application/json',
+      },
+    });
   }
 
+  loadAuthorsAndPosts();
 </script>
 </head>
 
-
 <body>
-
-<div class="split left">
 
 <label for="select-authors">Author:</label>
 <select name="Authors" id="select-authors" onchange="storeSelectedAuthorIndex(this.value); getPosts()">
@@ -198,42 +165,27 @@
 
 <div class="input-wrapper">
 <label for="postTitle">Title:</label>
-<textarea id="postTitle" name="postTitle" style="float: right; width: 80%;" rows=1></textarea>
+<textarea id="postTitle" name="postTitle" style="float: center; width: 20%;" rows=1></textarea>
 </div>
 
 <div class="input-wrapper">
 <label for="postAuthor">Author:</label>
-<textarea id="postAuthor" name="postAuthor" style="float: right; width: 80%;" rows=1></textarea>
+<textarea id="postAuthor" name="postAuthor" style="float: center; width: 20%;" rows=1></textarea>
 </div>
 
 <div class="input-wrapper">
 <label for="postDate">Date:</label>
-<textarea id="postDate" name="postDate" style="float: right; width: 80%;" rows=1></textarea>
+<textarea id="postDate" name="postDate" style="float: center; width: 20%;" rows=1></textarea>
 </div>
+
+<button type="button" onclick="updatePostMetadata();">Update post metadata</button>
 
 <div style="padding-top: 10px; padding-bottom: 20px; height: 90%;">
-<textarea id="postBody" name="postBody" style="resize: false; width: 90%; height: 90%; margin: 0 auto; display: block;" oninput="updatePostBodyHTML()"></textarea>
+<textarea id="postBody" name="postBody" style="resize: false; width: 90%; height: 90%; margin: 0 auto; display: block;"></textarea>
 </div>
 
-<div class="split right">
-  <div id="renderedHTML" class="rendered-post">
-  </div>
-
-  <script>window.markdeepOptions = {mode: 'script'};</script>
-  <script src="markdeep.min.js"></script><script src="https://morgan3d.github.io/markdeep/latest/markdeep.min.js"></script>
-  <script>
-  function updatePostBodyHTML() {
-    // var converter = new showdown.Converter();
-    const text = document.getElementById("postBody").value;
-    const html = window.markdeep.format(text);
-    document.getElementById("renderedHTML").innerHTML = html;
-    // document.getElementById("mdBlock").mdContent = text;
-  }
-  // updatePostBodyHTML();
-  loadAuthorsAndPosts();
-  </script>
-</div>
-</div>
+<button type="button" onclick="saveDraftBody()">Save post draft</button>
+<button type="button" style="float: right;" onclick="loadPreview()">Preview --></button>
 
 </body>
 </html>

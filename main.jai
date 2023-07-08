@@ -11,7 +11,12 @@ main :: () {
     http_listen(port=9980);
 
     // log every request
-    any("*", (request: *Request) { print("Have request to %\n", request.path); });
+    any("*", (request: *Request) { log("Have % request to %\n", request.method, request.path); });
+
+    // automatically respond to OPTIONS preflight requests with 200 OK
+    options("*", (request: *Request) {
+        send_html(request, "", status_code=200);
+    });
 
     get("/api/posts/by-author", (request: *Request) {
         push_allocator(temp);
@@ -19,33 +24,30 @@ main :: () {
         reset_temporary_storage();
     }); // get posts grouped by author
 
-    get("/api/posts/:id/draft_body", (request: *Request) {
+    get("/api/posts/:id/draft-body", (request: *Request) {
         push_allocator(temp);
         get_draft_body(request);
         reset_temporary_storage();
     }); // get the draft markdeep body for this post
-    post("/api/posts/:id/draft_body", (request: *Request) {
+    post("/api/posts/:id/draft-body", (request: *Request) {
         push_allocator(temp);
         update_draft_body(request);
         reset_temporary_storage();
     }); // update draft body
 
-    get("/api/posts/:id/draft",      (request: *Request) {});
-    get("/api/posts/:id/published",  (request: *Request) {});
+    // get("/api/posts/:id/draft",      (request: *Request) {});
+    // get("/api/posts/:id/published",  (request: *Request) {});
 
-    post("/api/posts/:id/title",      (request: *Request) {}); // update title
-    post("/api/posts/:id/date",       (request: *Request) {}); // update date
-    post("/api/publish/:id",          (request: *Request) {}); // draft body becomes published body
-
-    // get("/api/posts/:author/:date/:filename", (request: *Request) {
-    //     get_post(request);
-    // });
+    post("/api/posts/:id/metadata",   (request: *Request) {
+        push_allocator(temp);
+        update_post_metadata(request);
+        reset_temporary_storage();
+    }); // update author/title/date
 
     while 1 sleep_milliseconds(60_000); // the program just exits instantly without this
 }
 
 cors_middleware :: (request: *Request) {
-
     // table_add(*request.headers, "Access-Control-Allow-Origin", "*");
     // table_add(*request.headers, "Access-Control-Allow-Methods", "POST");
     // table_add(*request.headers, "Access-Control-Allow-Headers", "Origin, Methods, Content-Type");
@@ -55,7 +57,17 @@ cors_middleware :: (request: *Request) {
     // request.headers["Access-Control-Allow-Headers"] = "Origin, Methods, Content-Type";
 }
 
-// Authors :: Table(string, *[..]Post);
+// POSTS_DIRECTORY :: "/usr/local/www/legacy/posts";
+POSTS_DIRECTORY :: "/home/grish/scratch/attic-html/posts";
+HTML_DIRECTORY :: "/home/grish/scratch/attic-html";
+
+DB_FILE        :: "posts.db";
+DB_BACKUP_FILE :: #run tprint("%.bak", DB_FILE);
+
+using #import "Hash_Table";
+operator []= :: (t: *Table(string, string), index: string, value: string) {;
+    table_add(t, index, value);
+}
 
 Author :: struct {
     name: string;
@@ -63,12 +75,10 @@ Author :: struct {
 };
 
 Post :: struct {
-    id:     int;
-    author: string;
-    title:  string;
-    date:   string;
-    post:   string;
-    draft:  string;
+    id:        int;
+    author:    string;
+    title:     string;
+    date:      string;
 }
 
 get_posts_by_author :: (request: *Request) {
@@ -102,8 +112,6 @@ get_posts_by_author :: (request: *Request) {
     send_json(request, result);
 }
 
-DB_FILE :: "posts.db";
-
 load_posts :: () -> *[..] Post {
     #import "csv";
 
@@ -126,39 +134,6 @@ load_posts :: () -> *[..] Post {
     }
 
     return posts;
-}
-
-// overwrites the entire database file
-// write_posts_to_db :: (posts: *[..] Post) -> bool {
-//     #import "csv";
-
-//     builder: String_Builder;
-//     builder.allocator = temp;
-//     init_string_builder(*builder);
-
-//     for post: <<posts {
-//         append(builder, post.id);
-//     }
-
-//     return posts;
-// }
-
-// Post :: struct {
-//     id:     int;
-//     author: string;
-//     title:  string;
-//     date:   string;
-//     post:   string;
-//     draft:  string;
-// }
-
-// POSTS_DIRECTORY :: "/usr/local/www/legacy/posts";
-POSTS_DIRECTORY :: "/home/grish/scratch/attic-html/posts";
-HTML_DIRECTORY :: "/home/grish/scratch/attic-html";
-
-using #import "Hash_Table";
-operator []= :: (t: *Table(string, string), index: string, value: string) {;
-    table_add(t, index, value);
 }
 
 get_draft_body :: (request: *Request) {
@@ -187,7 +162,7 @@ get_draft_body :: (request: *Request) {
     found := false;
     for post: <<posts {
         if post.id == id {
-            draft_data, success := read_entire_file(join(POSTS_DIRECTORY, post.draft, separator="/"));
+            draft_data, success := read_entire_file(join(POSTS_DIRECTORY, tprint("%", post.id), "draft.md.html", separator="/"));
             if !success {
                 log("Failed to read draft file for post ID %", id);
                 send_html(request, tprint("<pre>Error reading post draft</pre>"), status_code=500);
@@ -206,53 +181,128 @@ get_draft_body :: (request: *Request) {
 
     result := json_write_string(draft);
     send_json(request, result);
-    // table_reset(*request.params); // TODO: seems like things break without this, should be in the lib though
 }
 
-// update_post_metadata :: (request: *Request) {
-//     post_metadata: struct {
-//         author: string;
-//         title: string;
-//         date: string;
-//     }
+update_post_metadata :: (request: *Request) {
+    Post_Metadata :: struct {
+        author: string;
+        title: string;
+        date: string;
+    }
 
-//     posts := load_posts();
-//     if posts == null {
-//         // TODO
-//     }
+    log("Received request to update post metadata");
 
-//     idStr, id_found := table_find(*request.params, "id");
-//     if !id_found {
-//         send_html(request, tprint("<pre>Missing id parameter</pre>"), status_code=400);
-//         return;
-//     }
-//     id, success := to_integer(idStr);
-//     if !success {
-//         send_html(request, tprint("<pre>id should be in integer</pre>"), status_code=400);
-//         return;
-//     }
+    posts := load_posts();
+    if posts == null {
+        log("Failed to load posts db");
+        send_html(request, tprint("<pre>Failed to load posts db</pre>"), status_code=500);
+        return;
+    }
 
-//     found := false;
-//     for post: <<posts {
-//         if post.id == id {
-//             found = true;
-//             break;
-//         }
-//     }
-//     if !found {
-//         send_html(request, tprint("<pre>post not found</pre>"), status_code=404);
-//         return;
-//     }
+    idStr, id_found := table_find(*request.params, "id");
+    if !id_found {
+        log("Request is missing id parameter");
+        send_html(request, tprint("<pre>Missing id parameter</pre>"), status_code=400);
+        return;
+    }
+    id, success := to_integer(idStr);
+    if !success {
+        log("Failed to parse id as integer");
+        send_html(request, tprint("<pre>id should be in integer</pre>"), status_code=400);
+        return;
+    }
 
-//     result := json_write_string(draft);
-//     send_json(request, result);
-//     // table_reset(*request.params); // TODO: seems like things break without this, should be in the lib though
-// }
+    log("Attempting to update metadata for post %", id);
+
+    found := false;
+    for * post: <<posts {
+        if post.id == id {
+            post_metadata: Post_Metadata;
+            success: bool;
+
+            { // pull out the request body
+                success, post_metadata = json_parse_string(request.body, Post_Metadata);
+                if !success {
+                    log("Failed to unmarshal json request body");
+                    send_html(request, tprint("<pre>Failed to unmarshal json request body</pre>"), status_code=400);
+                    return;
+                }
+            }
+
+            post.author = post_metadata.author;
+            post.title  = post_metadata.title;
+            post.date   = post_metadata.date;
+
+            found = true;
+            break;
+        }
+    }
+
+    if !found {
+        log("Post not found for id %", id);
+        send_html(request, tprint("<pre>post not found</pre>"), status_code=404);
+        return;
+    }
+
+    if !write_posts_to_db(posts) {
+        log("Failed to write updated posts to database");
+        send_html(request, tprint("<pre>Error updating post metadata</pre>"), status_code=500);
+        return;
+    }
+
+    log("Successfully updated metadata for post %", id);
+    send_html(request, tprint("<pre>Successfuly updated post metadata</pre>"), status_code=200);
+}
+
+// overwrites the entire database file
+write_posts_to_db :: (posts: *[..] Post) -> bool {
+    #import "csv";
+
+    builder: String_Builder;
+    builder.allocator = temp;
+    init_string_builder(*builder);
+    defer reset(*builder);
+
+    append(*builder, "id,author,title,date\n");
+
+    for post: <<posts {
+        append(*builder,
+            join(
+                tprint("%", post.id),
+                csv_escape(post.author),
+                csv_escape(post.title),
+                post.date,
+                separator=",",
+            )
+        );
+        append(*builder, #char "\n");
+    }
+
+    // copy the current draft to the backup file
+    if !copy_file(DB_FILE, DB_BACKUP_FILE) {
+        log("Failed to backup database file before overwriting");
+        return false;
+    }
+
+    // overwrite the current draft with the user's content
+    if !write_entire_file(DB_FILE, *builder) {
+        log("Failed to write updated post metadata to %", DB_FILE);
+        // restore backup DB
+        if !copy_file(DB_BACKUP_FILE, DB_FILE) {
+            log("Failed to restore backup database after write failure");
+        }
+        return false;
+    }
+
+    return true;
+}
 
 update_draft_body :: (request: *Request) {
     Post_Draft_Body :: struct {
         data: string;
     }
+
+    log("Have request to update post's draft body");
 
     posts := load_posts();
     if posts == null {
@@ -272,6 +322,8 @@ update_draft_body :: (request: *Request) {
         return;
     }
 
+    log("Attempting to update draft for post %", id);
+
     found := false;
     for post: <<posts {
         if post.id == id {
@@ -281,31 +333,31 @@ update_draft_body :: (request: *Request) {
             { // pull out the request body
                 success, new_draft = json_parse_string(request.body, Post_Draft_Body);
                 if !success {
-                    log("Failed to unmarshal json request body", id);
+                    log("Failed to unmarshal json request body");
                     send_html(request, tprint("<pre>Failed to unmarshal json request body</pre>"), status_code=400);
                     return;
                 }
             }
 
-            draft_file := join(POSTS_DIRECTORY, post.draft, separator="/");
+            draft_file := join(POSTS_DIRECTORY, tprint("%", post.id), "draft.md.html", separator="/");
             draft_backup_file := tprint("%.bak", draft_file);
 
-            { // copy the current draft to the backup file
-                success := copy_file(draft_file, draft_backup_file);
-                if !success {
-                    log("Failed to backup draft file before overwriting (id %)", id);
-                    send_html(request, tprint("<pre>Error updating draft</pre>"), status_code=500);
-                    return;
-                }
+            // copy the current draft to the backup file
+            if !copy_file(draft_file, draft_backup_file) {
+                log("Failed to backup draft file before overwriting (id %)", id);
+                send_html(request, tprint("<pre>Error updating draft</pre>"), status_code=500);
+                return;
             }
 
-            { // overwrite the current draft with the user's content
-                success := write_entire_file(draft_file, new_draft.data);
-                if !success {
-                    log("Failed to update draft for post id %", id);
-                    send_html(request, tprint("<pre>Error updating draft</pre>"), status_code=500);
-                    return;
+            // overwrite the current draft with the user's content
+            if !write_entire_file(draft_file, new_draft.data) {
+                log("Failed to update draft for post id %", id);
+                // restore backup DB
+                if !copy_file(draft_backup_file, draft_file) {
+                    log("Failed to restore backup database after write failure");
                 }
+                send_html(request, tprint("<pre>Error updating draft</pre>"), status_code=500);
+                return;
             }
 
             found = true;
@@ -317,177 +369,7 @@ update_draft_body :: (request: *Request) {
         send_html(request, tprint("<pre>Post id not found</pre>"), status_code=404);
         return;
     }
+
+    log("Successfully updated draft for post %", id);
     send_html(request, tprint("<pre>Successfully updated draft</pre>"), status_code=200);
-}
-
-// get_post :: (request: *Request) {
-//     postBody: struct {
-//         data: string;
-//     }
-
-//     author, author_found := table_find(*request.params, "author");
-//     if !author_found {
-//         send_html(request, tprint("<pre>Missing author parameter</pre>"), status_code=400);
-//         return;
-//     }
-//     log("author: %", author);
-
-//     date, date_found := table_find(*request.params, "date");
-//     if !date_found {
-//         send_html(request, tprint("<pre>Missing date parameter</pre>"), status_code=400);
-//         return;
-//     }
-//     log("date: %", date);
-
-//     filename, filename_found := table_find(*request.params, "filename");
-//     if !filename_found {
-//         send_html(request, tprint("<pre>Missing filename parameter</pre>"), status_code=400);
-//         return;
-//     }
-//     log("filename: %", filename);
-
-//     path := replace(join(POSTS_DIRECTORY, author, date, filename, separator="/"), "%20", " ");
-//     defer free(path);
-
-//     log("path: %", path);
-//     body, success := get_post_body(path);
-//     if !success {
-//         send_html(request, tprint("<pre>Post not found</pre>"), status_code=404);
-//         return;
-//     }
-
-//     postBody.data = body;
-//     result := json_write_string(postBody);
-//     send_json(request, result);
-//     // table_reset(*request.params); // TODO: seems like things break without this, should be in the lib though
-//     reset_temporary_storage();
-// }
-
-update_post :: (request: *Request) {
-
-    // load_posts
-
-    author, author_found := table_find(*request.params, "author");
-    if !author_found {
-        send_html(request, tprint("<pre>Missing author parameter</pre>"), status_code=400);
-        return;
-    }
-
-    date, date_found := table_find(*request.params, "date");
-    if !date_found {
-        send_html(request, tprint("<pre>Missing date parameter</pre>"), status_code=400);
-        return;
-    }
-
-    filename, filename_found := table_find(*request.params, "filename");
-    if !filename_found {
-        send_html(request, tprint("<pre>Missing filename parameter</pre>"), status_code=400);
-        return;
-    }
-
-    log(request.body);
-}
-
-parse_post_title :: (path: string) -> string, bool {
-
-    title: string = ---;
-    post_data, success := read_entire_file(path);
-    if !success {
-        log("Failed to read post file %", post_data);
-        return title, false;
-    }
-
-    title_left := find_index_from_left(post_data, "<title>");
-    if title_left == -1 {
-        log("Failed to parse title from post at path %", path);
-        return title, false;
-    }
-    title_left += 7; // offset the <title>
-
-    title_right := find_index_from_left(post_data, "</title>", title_left);
-    if title_right == -1 {
-        log("Failed to parse title from post at path %", path);
-        return title, false;
-    }
-
-    builder: String_Builder;
-    builder.allocator = temp;
-    init_string_builder(*builder);
-
-    for title_left..title_right-1 {
-        append(*builder, post_data[it]);
-    }
-    title = builder_to_string(*builder);
-    reset(*builder);
-
-    return title, true;
-}
-
-get_post_body :: (path: string) -> string, bool {
-
-    body: string = ---;
-    post_data, success := read_entire_file(path);
-    if !success {
-        log("Failed to read post file %", post_data);
-        return body, false;
-    }
-
-
-    LEFT_TAG  :: #string END
-<div class="pure-u-1 pure-u-xl-1-3 post-body">
-END
-
-    RIGHT_TAG :: #string END
-
-</div>
-<div class="pure-u-1 pure-u-xl-1-3"></div>
-END
-
-    body_left := find_index_from_left(post_data, LEFT_TAG);
-    if body_left == -1 {
-        log("Failed to parse left body tag from post at path %", path);
-        return body, false;
-    }
-    body_left += LEFT_TAG.count;
-
-    body_right := find_index_from_left(post_data, RIGHT_TAG, body_left);
-    if body_right == -1 {
-        log("Failed to parse right body tag from post at path %", path);
-        return body, false;
-    }
-
-    builder: String_Builder;
-    init_string_builder(*builder);
-
-    for body_left..body_right-1 {
-        append(*builder, post_data[it]);
-    }
-    body = builder_to_string(*builder);
-    reset(*builder);
-
-    return body, true;
-}
-
-get_post_paths :: () -> []Path #must {
-
-    new_context: Context;
-    new_context.allocator = temp;
-
-    push_context new_context {
-        paths: [..]Path;
-
-        visitor :: (info: *File_Visit_Info_With_Depth, paths: *[..] Path) {
-            if info.depth == 2 {
-                if info.short_name == "post.html" {
-                    array_add(paths, parse_path(info.full_name, reduce=true));
-                } else if info.is_directory {
-                    info.descend_into_directory = false;
-                }
-            }
-        }
-
-        visit_files_with_depth(POSTS_DIRECTORY, recursive=true, *paths, visitor, follow_symlinks=true);
-
-        return paths;
-    }
 }
