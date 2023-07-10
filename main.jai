@@ -35,6 +35,18 @@ main :: () {
         reset_temporary_storage();
     }); // update draft body
 
+    get("/api/posts/:id/draft-preview", (request: *Request) {
+        push_allocator(temp);
+        get_draft_preview(request);
+        reset_temporary_storage();
+    }); // generate a preview for this post's current draft
+
+    post("/api/posts/:id/publish",  (request: *Request) {
+        push_allocator(temp);
+        publish_draft(request);
+        reset_temporary_storage();
+    }); // publish the most recent draft
+
     // get("/api/posts/:id/draft",      (request: *Request) {});
     // get("/api/posts/:id/published",  (request: *Request) {});
 
@@ -77,8 +89,9 @@ Author :: struct {
 Post :: struct {
     id:        int;
     author:    string;
-    title:     string;
     date:      string;
+    title:     string;
+    live:      string;
 }
 
 get_posts_by_author :: (request: *Request) {
@@ -136,6 +149,80 @@ load_posts :: () -> *[..] Post {
     return posts;
 }
 
+publish_draft :: (request: *Request) {
+    posts := load_posts();
+    if posts == null {
+        log("Failed to load posts db");
+        send_html(request, tprint("<pre>Failed to load posts db</pre>"), status_code=500);
+        return;
+    }
+
+    idStr, id_found := table_find(*request.params, "id");
+    if !id_found {
+        send_html(request, tprint("<pre>Missing id parameter</pre>"), status_code=400);
+        return;
+    }
+    id, success := to_integer(idStr);
+    if !success {
+        send_html(request, tprint("<pre>ID should be in integer</pre>"), status_code=400);
+        return;
+    }
+
+    found := false;
+    for post: <<posts {
+        if post.id == id {
+            post_file := join(POSTS_DIRECTORY, tprint("%", post.id), "post.html", separator="/");
+            post_backup_file := tprint("%.bak", post_file);
+
+            // copy the current post to the backup file
+            if !copy_file(post_file, post_backup_file) {
+                log("Failed to backup post file before overwriting (id %)", id);
+                send_html(request, tprint("<pre>Error publish post</pre>"), status_code=500);
+                return;
+            }
+
+            new_post: string;
+            {
+                draft_data, load_draft_success := read_entire_file(join(POSTS_DIRECTORY, tprint("%", post.id), "draft.md.html", separator="/"));
+                if !load_draft_success {
+                    log("Failed to read draft file for post ID %", id);
+                    send_html(request, tprint("<pre>Error reading post draft</pre>"), status_code=500);
+                    return;
+                }
+
+                template_data, load_template_success := read_entire_file("post-template.html");
+                if !load_template_success {
+                    log("Failed to lost post template file for id %", id);
+                    send_html(request, tprint("<pre>Error reading post template</pre>"), status_code=500);
+                    return;
+                }
+
+                new_post = replace(replace(template_data, "{{BODY}}", draft_data), "{{TITLE}}", post.title);
+            }
+
+            // overwrite the current published post
+            if !write_entire_file(post_file, new_post) {
+                log("Failed to write updated post for id %", id);
+                // restore backup DB
+                if !copy_file(post_backup_file, post_file) {
+                    log("Failed to restore backup post after write failure");
+                }
+                send_html(request, tprint("<pre>Error publishing post</pre>"), status_code=500);
+                return;
+            }
+
+            found = true;
+            break;
+        }
+    }
+    if !found {
+        send_html(request, tprint("<pre>post not found</pre>"), status_code=404);
+        return;
+    }
+
+    send_html(request, "");
+}
+
 get_draft_body :: (request: *Request) {
     draft: struct {
         data: string;
@@ -183,9 +270,66 @@ get_draft_body :: (request: *Request) {
     send_json(request, result);
 }
 
+get_draft_preview :: (request: *Request) {
+    preview: string;
+
+    posts := load_posts();
+    if posts == null {
+        log("Failed to load posts db");
+        send_html(request, tprint("<pre>Failed to load posts db</pre>"), status_code=500);
+        return;
+    }
+
+    idStr, id_found := table_find(*request.params, "id");
+    if !id_found {
+        send_html(request, tprint("<pre>Missing id parameter</pre>"), status_code=400);
+        return;
+    }
+    id, success := to_integer(idStr);
+    if !success {
+        send_html(request, tprint("<pre>ID should be in integer</pre>"), status_code=400);
+        return;
+    }
+
+    found := false;
+    for post: <<posts {
+        if post.id == id {
+            draft_data: string;
+            success: bool;
+            {
+                draft_data, success = read_entire_file(join(POSTS_DIRECTORY, tprint("%", post.id), "draft.md.html", separator="/"));
+                if !success {
+                    log("Failed to read draft file for post ID %", id);
+                    send_html(request, tprint("<pre>Error reading post draft</pre>"), status_code=500);
+                    return;
+                }
+            }
+
+            template_data: string;
+            {
+                template_data, success = read_entire_file("post-template.html");
+                if !success {
+                    log("Failed to lost post template file for id %", id);
+                    send_html(request, tprint("<pre>Error reading post template</pre>"), status_code=500);
+                    return;
+                }
+            }
+
+            preview = replace(replace(template_data, "{{BODY}}", draft_data), "{{TITLE}}", post.title);
+            found = true;
+            break;
+        }
+    }
+    if !found {
+        send_html(request, tprint("<pre>post not found</pre>"), status_code=404);
+        return;
+    }
+
+    send_html(request, preview);
+}
+
 update_post_metadata :: (request: *Request) {
     Post_Metadata :: struct {
-        author: string;
         title: string;
         date: string;
     }
@@ -229,7 +373,6 @@ update_post_metadata :: (request: *Request) {
                 }
             }
 
-            post.author = post_metadata.author;
             post.title  = post_metadata.title;
             post.date   = post_metadata.date;
 
@@ -263,15 +406,16 @@ write_posts_to_db :: (posts: *[..] Post) -> bool {
     init_string_builder(*builder);
     defer reset(*builder);
 
-    append(*builder, "id,author,title,date\n");
+    append(*builder, "id,author,date,title,live\n");
 
     for post: <<posts {
         append(*builder,
             join(
                 tprint("%", post.id),
                 csv_escape(post.author),
-                csv_escape(post.title),
                 post.date,
+                csv_escape(post.title),
+                tprint("%", post.live),
                 separator=",",
             )
         );
@@ -354,7 +498,7 @@ update_draft_body :: (request: *Request) {
                 log("Failed to update draft for post id %", id);
                 // restore backup DB
                 if !copy_file(draft_backup_file, draft_file) {
-                    log("Failed to restore backup database after write failure");
+                    log("Failed to restore backup draft after write failure");
                 }
                 send_html(request, tprint("<pre>Error updating draft</pre>"), status_code=500);
                 return;

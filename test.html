@@ -6,7 +6,7 @@
 
 /* Split the screen in half */
 body {
-  background-image: url("/home/grish/src/jai/attic-backend/img/attic-background.jpg");
+  background-image: url("/img/crumpled-paper-background.jpg");
   background-size: auto;
   background-repeat: repeat;
   background-position: right;
@@ -23,7 +23,7 @@ body {
 
 <script type="text/javascript">
 
-  const baseUrl = "http://localhost:9980";
+  const baseUrl = "https://localhost";
 
   async function loadAuthorsAndPosts() {
     const res = await fetch(`${baseUrl}/api/posts/by-author`);
@@ -66,7 +66,7 @@ body {
     author.posts.forEach((post) => {
       const opt = document.createElement("option");
       opt.value = post.id;
-      opt.innerHTML = post.title + " (" + post.date + ")";
+      opt.innerHTML = post.title;
       select.appendChild(opt);
     });
 
@@ -88,7 +88,6 @@ body {
     const post = getSelectedPost();
 
     document.getElementById("postTitle").value = post.title;
-    document.getElementById("postAuthor").value = post.author;
     document.getElementById("postDate").value = post.date;
 
     await loadPostBody(post);
@@ -113,7 +112,6 @@ body {
     const post = getSelectedPost();
     const body = {
       title: document.getElementById("postTitle").value,
-      author: document.getElementById("postAuthor").value,
       date: document.getElementById("postDate").value,
     };
     const res = await fetch(`${baseUrl}/api/posts/${post.id}/metadata`, {
@@ -149,6 +147,18 @@ body {
     });
   }
 
+  async function loadPreview() {
+    const post = getSelectedPost();
+    window.location.href = `${baseUrl}/api/posts/${post.id}/draft-preview`;
+  }
+
+  async function publishPost() {
+    const post = getSelectedPost();
+    const res = await fetch(`${baseUrl}/api/posts/${post.id}/publish`, {
+      method: 'POST',
+    });
+  }
+
   loadAuthorsAndPosts();
 </script>
 </head>
@@ -169,13 +179,8 @@ body {
 </div>
 
 <div class="input-wrapper">
-<label for="postAuthor">Author:</label>
-<textarea id="postAuthor" name="postAuthor" style="float: center; width: 20%;" rows=1></textarea>
-</div>
-
-<div class="input-wrapper">
 <label for="postDate">Date:</label>
-<textarea id="postDate" name="postDate" style="float: center; width: 20%;" rows=1></textarea>
+<input type="date" id="postDate" name="postDate" />
 </div>
 
 <button type="button" onclick="updatePostMetadata();">Update post metadata</button>
@@ -185,7 +190,8 @@ body {
 </div>
 
 <button type="button" onclick="saveDraftBody()">Save post draft</button>
-<button type="button" style="float: right;" onclick="loadPreview()">Preview --></button>
+<button type="button" onclick="loadPreview()">Preview --></button>
+<button type="button" style="float: right;" onclick="publishPost()">Publish</button>
 
 </body>
 </html>
