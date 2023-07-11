@@ -23,7 +23,7 @@ body {
 
 <script type="text/javascript">
 
-  const baseUrl = "https://localhost";
+  const baseUrl = "https://grish.haus";
 
   async function loadAuthorsAndPosts() {
     const res = await fetch(`${baseUrl}/api/posts/by-author`);
@@ -149,7 +149,7 @@ body {
 
   async function loadPreview() {
     const post = getSelectedPost();
-    window.location.href = `${baseUrl}/api/posts/${post.id}/draft-preview`;
+    window.open(`${baseUrl}/api/posts/${post.id}/draft-preview`, '_blank');
   }
 
   async function publishPost() {
@@ -157,6 +157,19 @@ body {
     const res = await fetch(`${baseUrl}/api/posts/${post.id}/publish`, {
       method: 'POST',
     });
+  }
+
+  async function uploadCoverImage() {
+    const input = document.getElementById("cover");
+    let data = new FormData();
+    data.append('file', input.files[0]);
+
+    const post = getSelectedPost();
+    fetch(`${baseUrl}/api/posts/${post.id}/cover`, {
+      method: 'POST',
+      body: data,
+    });
+    //document.getElementById("cover").action = `${baseUrl}/api/posts/${post.id}/cover`;
   }
 
   loadAuthorsAndPosts();
@@ -185,13 +198,19 @@ body {
 
 <button type="button" onclick="updatePostMetadata();">Update post metadata</button>
 
+<form style="float: right;" onsubmit="uploadCoverImage();">
+  <label for="file">Cover image</label>
+  <input type="file" id="cover" name="cover" accept="image/*">
+  <button>Upload</button>
+</form>
+
 <div style="padding-top: 10px; padding-bottom: 20px; height: 90%;">
 <textarea id="postBody" name="postBody" style="resize: false; width: 90%; height: 90%; margin: 0 auto; display: block;"></textarea>
 </div>
 
 <button type="button" onclick="saveDraftBody()">Save post draft</button>
 <button type="button" onclick="loadPreview()">Preview --></button>
-<button type="button" style="float: right;" onclick="publishPost()">Publish</button>
+<button type="button" style="float: right;" onclick="publishPost();">Publish</button>
 
 </body>
 </html>
