@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+<style>
+
+/* Split the screen in half */
+body {
+  background-image: url("/img/crumpled-paper-background.jpg");
+  background-size: auto;
+  background-repeat: repeat;
+  background-position: right;
+}
+
+.input-wrapper {
+  padding-right: 10px;
+  padding-bottom: 10px;
+}
+
+.h1 .h2 .h3 {
+  font-family: "American Typewriter", serif;
+}
+
+</style>
+
+<script type="text/javascript">
+
+  const baseUrl = "https://grish.haus";
+
+  async function createPost() {
+    const author = document.getElementById("postAuthor").value;
+    const title = document.getElementById("postTitle").value;
+
+    const messageBox = document.getElementById("input-error");
+    messageBox.innerHTML = "";
+    messageBox.style.visibility = "hidden";
+    let error = false;
+    if (author === "") {
+      messageBox.innerHTML += "Author cannot be blank";
+      error = true;
+    }
+    if (title === "") {
+      if (error) {
+        messageBox.innerHTML += "<br>"
+      }
+      messageBox.innerHTML += "Title cannot be blank";
+      error = true;
+    }
+    if (error) {
+      messageBox.style.visibility = "visible";
+      messageBox.style.backgroundColor = "rgba(220, 0, 30, 0.7)";
+      return;
+    }
+
+    const body = {
+      title,
+      author,
+    };
+
+    const res = await fetch(`${baseUrl}/api/posts`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+      headers: {
+        'Content-Type': 'application/json',
+      },
+    });
+
+    if (!res || !res.ok) {
+      messageBox.innerHTML = "Error creating post";
+      messageBox.style.visibility = "visible";
+      messageBox.style.backgroundColor = "rgba(220, 0, 30, 0.7)";
+      return;
+    }
+
+    const data = await res.json();
+
+    window.location.href = `/test.html?id=${data.id}`;
+    // messageBox.innerHTML = `Successfully created post with ID ${data.id}, redirecting to post editor in 3s...`;
+    // messageBox.style.visibility = "visible";
+    // messageBox.style.backgroundColor = "rgba(0, 220, 30, 0.7)";
+
+    // setTimeout(function() { window.location.href = `/test.html?id=${data.id}` }, 3000);
+  }
+
+</script>
+</head>
+
+<body>
+  <h1>New post</h1>
+
+  <div class="input-wrapper">
+  <label for="postAuthor">Author:</label>
+  <textarea id="postAuthor" name="postAuthor" style="float: center; width: 20%;" rows=1></textarea>
+  </div>
+
+  <div class="input-wrapper">
+  <label for="postTitle">Title:</label>
+  <textarea id="postTitle" name="postTitle" style="float: center; width: 20%;" rows=1></textarea>
+  </div>
+
+  <iframe name="frame" style="display: none;"></iframe>
+  <form onsubmit="createPost();" target="frame">
+    <button type="submit">Create post</button>
+  </form>
+
+  <div id="input-error" style="background-color: rgba(220, 0, 30, 0.7); padding: 10px; border: 1px solid red; visibility: hidden;"></div>
+
+</body>
+</html>

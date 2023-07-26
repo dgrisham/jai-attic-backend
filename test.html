@@ -4,6 +4,9 @@
 <head>
 <style>
 
+/* @import url("https://unpkg.com/purecss@2.0.1/build/pure-min.css"); */
+/* @import url("https://unpkg.com/purecss@1.0.1/build/grids-responsive-min.css"); */
+
 /* Split the screen in half */
 body {
   background-image: url("/img/crumpled-paper-background.jpg");
@@ -17,23 +20,72 @@ body {
   padding-bottom: 10px;
 }
 
-</style>
+a#editor-post-thumbnail div:last-child {
+  display: none;
+}
 
-<script type="module" src="https://md-block.verou.me/md-block.js"></script>
+a#editor-post-thumbnail div:first-child {
+}
+
+a#editor-post-thumbnail:hover div:first-child {
+  display: none;
+}
+
+a#editor-post-thumbnail:hover div:last-child {
+  display: inline;
+}
+
+</style>
 
 <script type="text/javascript">
 
   const baseUrl = "https://grish.haus";
+
+  function getURLParam(key) {
+    const queryString = window.location.search.substring(1);
+    const urlVars = queryString.split('&');
+    for (var i = 0; i < urlVars.length; i++) {
+      var paramElements = urlVars[i].split('=');
+      if (paramElements[0] == key) {
+        return paramElements[1];
+      }
+    }
+    return "";
+  }
 
   async function loadAuthorsAndPosts() {
     const res = await fetch(`${baseUrl}/api/posts/by-author`);
     const authors = Array.from(await res.json());
     sessionStorage.setItem("authors", JSON.stringify(authors));
 
-    sessionStorage.setItem("selectedAuthorIndex", 0);
-    sessionStorage.setItem("selectedPostIndex", 0);
+    // check if the url includes an id param, and select that post if so
+    const id = getURLParam("id");
+    if (id !== "") {
+      for (let [authorIndex, author] of authors.entries()) {
+        for (const [postIndex, post] of author.posts.entries()) {
+          if (post.id == id) {
+            sessionStorage.setItem("selectedAuthorIndex", authorIndex);
+            sessionStorage.setItem("selectedPostIndex", postIndex);
+          }
+        }
+      }
+      // remove the query string so we don't load this again
+      window.location = window.location.href.split('?')[0];
+    }
+
+    // if we don't have a selected post stored at this point, default to the first
+    if (sessionStorage.getItem("selectedAuthorIndex") === null) {
+      sessionStorage.setItem("selectedAuthorIndex", 0);
+    }
+    if (sessionStorage.getItem("selectedPostIndex") === null) {
+      sessionStorage.setItem("selectedPostIndex", 0);
+    }
+
     getAuthors();
+    selectStoredAuthor();
     getPosts();
+    selectStoredPost();
+    setPostData();
   }
 
   function getAuthors() {
@@ -49,6 +101,38 @@ body {
     sessionStorage.setItem("authors", JSON.stringify(authors));
   }
 
+  function selectStoredAuthor() {
+    const authors = JSON.parse(sessionStorage.getItem("authors"));
+    const selectedAuthorIndex = sessionStorage.getItem("selectedAuthorIndex");
+    let selectedAuthor = authors[selectedAuthorIndex];
+    if (typeof selectedAuthor === 'undefined') { // this author may have been removed, default to the first one
+      selectedAuthor = authors[0];
+      sessionStorage.setItem("selectedAuthorIndex", 0);
+      if (typeof selectedAuthor === 'undefined') {
+        return;
+      }
+      sessionStorage.setItem("selectedPostIndex", 0);
+    };
+    document.getElementById("select-authors").value = selectedAuthor.name;
+  }
+
+  function selectStoredPost() {
+    const authors = JSON.parse(sessionStorage.getItem("authors"));
+    const selectedAuthorIndex = sessionStorage.getItem("selectedAuthorIndex");
+    const selectedAuthor = authors[selectedAuthorIndex];
+
+    const selectedPostIndex = sessionStorage.getItem("selectedPostIndex");
+    let selectedPost = selectedAuthor.posts[selectedPostIndex];
+    if (typeof selectedPost === 'undefined') {
+      selectedPost = selectedAuthor.posts[0];
+      sessionStorage.setItem("selectedPostIndex", 0);
+      if (typeof selectedPost === 'undefined') {
+        return;
+      }
+    };
+    document.getElementById("select-posts").value = selectedPost.id;
+  }
+
   function getPosts() {
     const authors = JSON.parse(sessionStorage.getItem("authors"));
 
@@ -59,7 +143,7 @@ body {
 
     const selectedAuthorIndex = sessionStorage.getItem("selectedAuthorIndex");
     let author = authors[selectedAuthorIndex];
-    if (author == undefined) {
+    if (typeof author === 'undefined') {
       return;
     };
 
@@ -69,8 +153,6 @@ body {
       opt.innerHTML = post.title;
       select.appendChild(opt);
     });
-
-    setPostData(select.value);
   }
 
   function getSelectedPost() {
@@ -84,13 +166,39 @@ body {
     return post;
   }
 
+  function updateTextAreaHeight(inputElement) {
+    inputElement.style.height = "";
+    inputElement.style.height = `${inputElement.scrollHeight + 3}px`;
+  }
+
   async function setPostData() {
     const post = getSelectedPost();
 
-    document.getElementById("postTitle").value = post.title;
-    document.getElementById("postDate").value = post.date;
+    const postTitleInput = document.getElementById("postTitle");
+    postTitleInput.value = post.title;
+    updateTextAreaHeight(postTitleInput);
 
-    await loadPostBody(post);
+    const postAuthorInput = document.getElementById("postAuthor");
+    postAuthorInput.value = post.author;
+    updateTextAreaHeight(postAuthorInput);
+
+    document.getElementById("postDate").value = post.date;
+    document.getElementById("postIsPublic").checked = post.is_public === true;
+
+    document.getElementById("postBody").value = "";
+
+    // fetch post's draft body from the api
+    const res = await fetch(`${baseUrl}/api/posts/${post.id}/draft-body`);
+    if (res.ok) {
+      const data = await res.json();
+      const markdown = data.data;
+      document.getElementById("postBody").value = markdown;
+    }
+
+    // set the image thumbnail sources to point to this post's thumbnails
+    const randomNumber = (new Date()).getTime();
+    document.getElementById('editor-thumbnail-bw').src = `/posts/${post.id}/thumbnail-bw.png?v=${randomNumber}`;
+    document.getElementById('editor-thumbnail').src    = `/posts/${post.id}/thumbnail.png?v=${randomNumber}`;
   }
 
   function storeSelectedAuthorIndex(authorName) {
@@ -112,7 +220,9 @@ body {
     const post = getSelectedPost();
     const body = {
       title: document.getElementById("postTitle").value,
+      author: document.getElementById("postAuthor").value,
       date: document.getElementById("postDate").value,
+      is_public: document.getElementById("postIsPublic").checked,
     };
     const res = await fetch(`${baseUrl}/api/posts/${post.id}/metadata`, {
       method: 'POST',
@@ -121,17 +231,18 @@ body {
         'Content-Type': 'application/json',
       },
     });
+
+    location.reload();
   }
 
-  async function loadPostBody(post) {
-    document.getElementById("postBody").value = "";
-
-    const res = await fetch(`${baseUrl}/api/posts/${post.id}/draft-body`);
-    const data = await res.json();
-
-    const markdown = data.data;
-    document.getElementById("postBody").value = markdown;
+  function debounce(func, timeout=1000){
+    let timer;
+    return (...args) => {
+      clearTimeout(timer);
+      timer = setTimeout(() => { func.apply(this, args); }, timeout);
+    };
   }
+  const saveDraftBodyDebounced = debounce(() => saveDraftBody());
 
   async function saveDraftBody() {
     const post = getSelectedPost();
@@ -145,10 +256,24 @@ body {
         'Content-Type': 'application/json',
       },
     });
+
+    const draftSaveStatus = document.getElementById("draft-save-status");
+    draftSaveStatus.style.visibility = "hidden";
+    if (!res || !res.ok) {
+      draftSaveStatus.innerHTML = "Failed to save post draft";
+      draftSaveStatus.style.color = "rgb(150, 0, 10)";
+      draftSaveStatus.style.visibility = "visible";
+      return false;
+    }
+    return true;
   }
 
   async function loadPreview() {
+    if (!(await saveDraftBody())) {
+      return;
+    }
     const post = getSelectedPost();
+
     window.open(`${baseUrl}/api/posts/${post.id}/draft-preview`, '_blank');
   }
 
@@ -160,57 +285,197 @@ body {
   }
 
   async function uploadCoverImage() {
-    const input = document.getElementById("cover");
+    const uploadForm = document.getElementById("cover");
     let data = new FormData();
-    data.append('file', input.files[0]);
+    data.append('file', uploadForm.files[0]);
 
     const post = getSelectedPost();
-    fetch(`${baseUrl}/api/posts/${post.id}/cover`, {
+    const res = await fetch(`${baseUrl}/api/posts/${post.id}/cover`, {
       method: 'POST',
       body: data,
     });
-    //document.getElementById("cover").action = `${baseUrl}/api/posts/${post.id}/cover`;
+
+    const uploadStatus = document.getElementById("cover-upload-status");
+    if (!res || !res.ok) {
+      uploadStatus.innerHTML = "Failed to upload image";
+      uploadStatus.style.backgroundColor = "rgba(220, 0, 30, 0.7)";
+      uploadStatus.style.visibility = "visible";
+    } else {
+      uploadStatus.innerHTML = "Successfully uploaded cover image for processing";
+      uploadStatus.style.backgroundColor = "rgba(0, 200, 200, 0.7)";
+      uploadStatus.style.visibility = "visible";
+
+      setTimeout(pollThumbnailStatus, 5000);
+    }
+  }
+
+  async function pollThumbnailStatus() {
+    const post = getSelectedPost();
+    const res = await fetch(`${baseUrl}/api/posts/${post.id}/thumbnail-status`);
+    const data = await res.json();
+
+    const uploadStatus = document.getElementById("cover-upload-status");
+    if (!res || !res.ok) {
+      uploadStatus.innerHTML = "Failed to get thumbnail creation status";
+      uploadStatus.style.backgroundColor = "rgba(220, 0, 30, 0.7)";
+      uploadStatus.style.visibility = "visible";
+    }
+
+    if (data.state === "READY") {
+      uploadStatus.innerHTML = "Image queued for thumbnail generation...";
+      uploadStatus.style.backgroundColor = "rgba(185, 205, 0, 0.7)";
+      uploadStatus.style.visibility = "visible";
+      setTimeout(pollThumbnailStatus, 5000);
+    } else if (data.state === "DONE") {
+      uploadStatus.innerHTML = "Thumbnail creation successful";
+      uploadStatus.style.backgroundColor = "rgba(255, 255, 255, 0.7)";
+      uploadStatus.style.visibility = "visible";
+
+      const randomNumber = (new Date()).getTime();
+      document.getElementById('editor-thumbnail-bw').src = `/posts/${post.id}/thumbnail-bw.png?v=${randomNumber}`;
+      document.getElementById('editor-thumbnail').src    = `/posts/${post.id}/thumbnail.png?v=${randomNumber}`;
+    } else if (data.state === "ERROR") {
+      uploadStatus.innerHTML = data.error_reason;
+      uploadStatus.style.backgroundColor = "rgba(220, 0, 30, 0.7)";
+      uploadStatus.style.visibility = "visible";
+    }
+  }
+
+  function clearUploadStatus() {
+      document.getElementById("cover-upload-status").style.visibility = "hidden";
   }
 
   loadAuthorsAndPosts();
+
+  window.onresize = function () {
+    updateTextAreaHeight(document.getElementById("postTitle"));
+    updateTextAreaHeight(document.getElementById("postAuthor"));
+  };
+
 </script>
 </head>
 
 <body>
 
-<label for="select-authors">Author:</label>
-<select name="Authors" id="select-authors" onchange="storeSelectedAuthorIndex(this.value); getPosts()">
-</select>
-
-<label for="select-posts">Post:</label>
-<select name="Posts" id="select-posts" onchange="storeSelectedPostIndex(this.value); setPostData()">
-</select>
-
-<div class="input-wrapper">
-<label for="postTitle">Title:</label>
-<textarea id="postTitle" name="postTitle" style="float: center; width: 20%;" rows=1></textarea>
-</div>
-
-<div class="input-wrapper">
-<label for="postDate">Date:</label>
-<input type="date" id="postDate" name="postDate" />
-</div>
-
-<button type="button" onclick="updatePostMetadata();">Update post metadata</button>
-
-<form style="float: right;" onsubmit="uploadCoverImage();">
-  <label for="file">Cover image</label>
-  <input type="file" id="cover" name="cover" accept="image/*">
-  <button>Upload</button>
+<div class="post-create" style="display: block; float: right; padding: 10px 10px 0px 0px;">
+<form action="/create-post.html" style="">
+  <input type="submit" value="Create new post" />
 </form>
-
-<div style="padding-top: 10px; padding-bottom: 20px; height: 90%;">
-<textarea id="postBody" name="postBody" style="resize: false; width: 90%; height: 90%; margin: 0 auto; display: block;"></textarea>
 </div>
 
-<button type="button" onclick="saveDraftBody()">Save post draft</button>
-<button type="button" onclick="loadPreview()">Preview --></button>
-<button type="button" style="float: right;" onclick="publishPost();">Publish</button>
+<div class="post-chooser" style="clear: both; display: block; background-color: rgba(120, 120, 120, 0.7); padding: 10px; border: 1px double black;">
+  <p style="margin-top:0px;"><u><b>Select post to edit</b></u></p>
+
+  <label for="select-authors">Author:</label>
+  <select name="Authors" id="select-authors" onchange="storeSelectedAuthorIndex(this.value); getPosts(); setPostData();">
+  </select>
+
+  <label for="select-posts">Post:</label>
+  <select name="Posts" id="select-posts" onchange="storeSelectedPostIndex(this.value); setPostData();">
+  </select>
+</div>
+
+<style>
+  @import url("https://unpkg.com/purecss@2.0.1/build/pure-min.css");
+  @import url("https://unpkg.com/purecss@1.0.1/build/grids-responsive-min.css");
+</style>
+
+<div class="pure-g" style="margin-top: 10px;">
+
+  <div class="pure-u-3-24">
+
+    <div class="post-metadata-editor" style="width: 100%; padding-left: 20px; box-sizing: border-box;">
+      <p style="text-align: center; margin-bottom: 20px;"><u><b>Post Metadata</b></u></p>
+
+      <div class="input-wrapper" style="float: left; width: 100%;">
+      <label for="postTitle">Title</label><br/>
+      <textarea id="postTitle" name="postTitle" style="width: 100%; max-width: 100%;" rows=1 oninput='updateTextAreaHeight(this);'></textarea>
+      </div>
+
+      <div class="input-wrapper">
+      <label for="postAuthor">Author</label><br/>
+      <textarea id="postAuthor" name="postAuthor" style="float: center; width: 100%; max-width: 100%;" rows=1 oninput='updateTextAreaHeight(this);'></textarea>
+      </div>
+
+      <div class="input-wrapper">
+      <label for="postDate">Date</label><br/>
+      <input type="date" id="postDate" name="postDate" style="max-width: 100%" />
+      </div>
+
+      <div class="input-wrapper">
+      <input type="checkbox" id="postIsPublic" name="postIsPublic" />
+      <label for="postIsPublic">Public</label>
+      </div>
+
+      <button type="button" onclick="updatePostMetadata();">Update post metadata</button>
+    </div>
+  </div>
+
+  <div class="pure-u-1-24"></div>
+
+  <div class="pure-u-13-24">
+    <p style="text-align: center; margin-bottom: 20px;"><u><b>Post Draft</b></u></p>
+    <textarea id="postBody" name="postBody" style="resize: false; width: 100%; height: 50vh; margin-bottom: 20px; display: block;" oninput="saveDraftBodyDebounced();"></textarea>
+    <button type="button" onclick="loadPreview();">Preview --></button>
+    <button type="button" style="float: right;" onclick="publishPost();">Publish draft</button>
+    <div id="draft-save-status" style="margin-top: 10px; margin-left: auto; margin-right: auto; text-align: center; max-width: 60%; visibility: hidden;"></div>
+  </div>
+
+  <div class="pure-u-1-24"></div>
+
+  <style>
+    #thumbnail-wrapper {
+      width: 100%;
+    }
+
+    .effect {
+      width: 100%;
+      padding: 10px;
+      text-align: center;
+    }
+
+    .effect img.image {
+      background-repeat: no-repeat;
+      background-size: contain;
+      width: auto;
+      height: auto;
+      max-width: 100%;
+      max-height: 50vh;
+    }
+    .effect:hover img.image {
+      display: none;
+    }
+    .effect img.hover{
+      display:none;
+    }
+    .effect:hover img.hover{
+      display:inline;
+    }
+
+  </style>
+
+  <div class="pure-u-5-24">
+    <iframe name="frame" style="display: none;"></iframe>
+    <div id="thumbnail-wrapper">
+      <p style="text-align: center; margin-bottom: 20px;"><u><b>Post Thumbnail</b></u></p>
+      <br/>
+      <div class="effect">
+        <img id="editor-thumbnail-bw" class="image"></img>
+        <img id="editor-thumbnail"    class="image hover"></img>
+      </div>
+      <br/>
+      <form style="text-align: center;" onsubmit="uploadCoverImage();" enctype="multipart/form-data" target="frame">
+        <label for="file"><b>Update cover image</b></label><br/>
+        <input style="padding-top: 10px;" type="file" id="cover" name="cover" accept="image/*" onchange="clearUploadStatus();"">
+        <button type="submit">Upload</button>
+      </form>
+      <div id="cover-upload-status" style="margin-left: auto; margin-right: auto; text-align: center; max-width: 80%; background-color: #cfc; padding: 10px; border: 1px solid black; visibility: hidden;"></div>
+    </div>
+  </div>
+
+  <div class="pure-u-1-24"></div>
+
+</div>
 
 </body>
 </html>
